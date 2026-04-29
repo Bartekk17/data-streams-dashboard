@@ -1,4 +1,4 @@
-**Real-Time Analytics Dashboard for Data Streams
+**Real-Time Analytics Dashboard for Data Streams**
 * Machine Learning Methods for Data Streams
 * Author: Bartosz Szymański
 

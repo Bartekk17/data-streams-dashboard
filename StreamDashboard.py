@@ -4,6 +4,7 @@ from collections import deque
 from river import metrics, compose, preprocessing, linear_model
 from IPython.display import display
 
+
 class StreamDashboard:
     def __init__(self, model, feature_names, metric_type="accuracy",
                  window_size=300, ref_lag=500, update_freq=100, top_n_features=10):
@@ -34,10 +35,13 @@ class StreamDashboard:
         # Metric selection
         if metric_type == "kappa":
             self.metric = metrics.CohenKappa()
+            self.aux_metric = metrics.CohenKappa()
         elif metric_type == "f1":
             self.metric = metrics.F1()
+            self.aux_metric = metrics.F1()
         else:
             self.metric = metrics.Accuracy()
+            self.aux_metric = metrics.Accuracy()
         self.metric_name = metric_type.upper()
 
         # Buffers - long enough to hold current window + lag + reference window
@@ -54,6 +58,7 @@ class StreamDashboard:
         self.steps_hist       = []
         self.weights_hist     = {}   # {feature: [weights over time]}
         self.metric_hist      = []
+        self.aux_metric_hist  = []   # auxiliary model metric history
         self.conf_margin_hist = []
         self.roll_acc0_hist   = []   # rolling accuracy klasy 0
         self.roll_acc1_hist   = []   # rolling accuracy klasy 1
@@ -76,7 +81,8 @@ class StreamDashboard:
             4, 2, figsize=(16, 24),
             gridspec_kw={"hspace": 0.45, "wspace": 0.3}
         )
-        self.ax1, self.ax2, self.ax3, self.ax4,         self.ax5, self.ax6, self.ax7, self.ax8 = self.axes.flatten()
+        self.ax1, self.ax2, self.ax3, self.ax4, \
+        self.ax5, self.ax6, self.ax7, self.ax8 = self.axes.flatten()
         self.fig.suptitle("Stream Analytics Dashboard (Webb et al.)", fontsize=18)
 
         # Error heatmap colorbar — created once
@@ -150,6 +156,10 @@ class StreamDashboard:
 
         if y_pred is not None:
             self.metric.update(y, y_pred)
+            
+        y_pred_aux = self.weight_model.predict_one(x)
+        if y_pred_aux is not None:
+            self.aux_metric.update(y, y_pred_aux)
 
         self.X_hist.append(dict(x))
         self.y_hist.append(y)
@@ -171,13 +181,15 @@ class StreamDashboard:
             # Update top-2
             self.top2 = self._get_top2()
 
-            # Global metric
+            # Global metrics
             self.metric_hist.append(self.metric.get())
+            self.aux_metric_hist.append(self.aux_metric.get())
 
             # Confidence margin (EMA)
             p = self.model.predict_proba_one(x)
             margin = abs(p.get(1, 0.5) - p.get(0, 0.5))
-            smoothed = margin if not self.conf_margin_hist                 else self.conf_margin_hist[-1] * 0.9 + margin * 0.1
+            smoothed = margin if not self.conf_margin_hist \
+               else self.conf_margin_hist[-1] * 0.9 + margin * 0.1
             self.conf_margin_hist.append(smoothed)
 
             # Rolling accuracy per class (last 100 samples)
@@ -209,9 +221,6 @@ class StreamDashboard:
         if self.step % self.update_freq == 0 and self.step > self.ref_lag:
             self._draw()
 
-    # ------------------------------------------------------------------
-    # Plots
-    # ------------------------------------------------------------------
 
     def _draw(self):
         """Refresh all dashboard plots."""
@@ -336,18 +345,32 @@ class StreamDashboard:
 
         # --- Plot 4: Quality metric ---
         self.ax4.plot(self.steps_hist, self.metric_hist,
-                      color=COLORS["purple"], linewidth=1.5)
+                      color=COLORS["purple"], linewidth=1.5, label="Main model")
         self.ax4.fill_between(self.steps_hist, self.metric_hist,
                                alpha=0.15, color=COLORS["purple"])
+                               
+        if self.aux_metric_hist:
+            self.ax4.plot(self.steps_hist, self.aux_metric_hist,
+                          color=COLORS["teal"], linewidth=1.5, linestyle="--", label="LogReg (aux)")
+                          
+        self.ax4.legend(fontsize=8, framealpha=0.3,
+                        labelcolor=COLORS["text"],
+                        facecolor=COLORS["bg"], loc="lower left")
+
         style_ax(self.ax4, f"Metric: {self.metric_name} (prequential)",
                  xlabel="Step", ylabel=self.metric_name)
         self.ax4.set_ylim(0, 1.1)
         self.ax4.axhline(0.5, color=COLORS["grid"], linestyle="--", linewidth=0.8)
         if self.metric_hist:
-            self.ax4.text(0.99, 0.04,
-                          f"current: {self.metric_hist[-1]:.3f}",
+            self.ax4.text(0.99, 0.12,
+                          f"main: {self.metric_hist[-1]:.3f}",
                           transform=self.ax4.transAxes,
                           fontsize=8, color=COLORS["purple"],
+                          ha="right", va="bottom")
+            self.ax4.text(0.99, 0.04,
+                          f"aux: {self.aux_metric_hist[-1]:.3f}",
+                          transform=self.ax4.transAxes,
+                          fontsize=8, color=COLORS["teal"],
                           ha="right", va="bottom")
 
         # --- Plot 5: Rolling accuracy per class ---
